@@ -5,8 +5,6 @@ set -euo pipefail
 readonly APP_NAME="pug-ng"
 readonly CONFIG_FILE="${PUG_NG_CONFIG_FILE:-/etc/pug-ng/config}"
 readonly TOKEN_FILE_DEFAULT="/etc/pug-ng/token"
-readonly PACMAN_FILE_NAME="pacman-list.pkg"
-readonly AUR_FILE_NAME="aur-list.pkg"
 readonly GITHUB_API_BASE="https://api.github.com"
 
 quiet=false
@@ -34,6 +32,21 @@ ensure_root() {
   if [[ "$(id -u)" -ne 0 ]]; then
     die "this command must run as root"
   fi
+}
+
+host_name() {
+  local name=""
+  name="$(uname -n 2>/dev/null || true)"
+  [[ -n "${name}" ]] || die "failed to determine hostname"
+  printf '%s' "${name}"
+}
+
+pacman_file_name() {
+  printf '%s.pacman-list.pkg' "$(host_name)"
+}
+
+aur_file_name() {
+  printf '%s.aur-list.pkg' "$(host_name)"
 }
 
 legacy_pug_present() {
@@ -496,6 +509,8 @@ cmd_init() {
   local token_file_arg=""
   local force=false
   local token=""
+  local pacman_file=""
+  local aur_file=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -545,13 +560,15 @@ cmd_init() {
   token="$(resolve_token_for_init "${token_arg}")"
   native_list="$(make_native_list)"
   aur_list="$(make_aur_list)"
+  pacman_file="$(pacman_file_name)"
+  aur_file="$(aur_file_name)"
 
   if has_configured_ids && ! ${force}; then
     die "gists already configured; use --force to recreate them"
   fi
 
-  PACMAN_GIST_ID="$(create_gist "${PACMAN_FILE_NAME}" "Pacman package list from ${APP_NAME}" "${visibility}" "${native_list}" "${token}")"
-  AUR_GIST_ID="$(create_gist "${AUR_FILE_NAME}" "AUR package list from ${APP_NAME}" "${visibility}" "${aur_list}" "${token}")"
+  PACMAN_GIST_ID="$(create_gist "${pacman_file}" "Pacman package list from ${APP_NAME}" "${visibility}" "${native_list}" "${token}")"
+  AUR_GIST_ID="$(create_gist "${aur_file}" "AUR package list from ${APP_NAME}" "${visibility}" "${aur_list}" "${token}")"
   save_config
 
   cat <<EOF
@@ -566,7 +583,7 @@ EOF
 }
 
 cmd_sync() {
-  local token native_list aur_list changed=0
+  local token native_list aur_list changed=0 pacman_file aur_file
   load_config
 
   if ! has_configured_ids; then
@@ -580,15 +597,17 @@ cmd_sync() {
   token="$(get_token)"
   native_list="$(make_native_list)"
   aur_list="$(make_aur_list)"
+  pacman_file="$(pacman_file_name)"
+  aur_file="$(aur_file_name)"
 
-  if update_gist_if_changed "${PACMAN_GIST_ID}" "${PACMAN_FILE_NAME}" "${native_list}" "${token}"; then
+  if update_gist_if_changed "${PACMAN_GIST_ID}" "${pacman_file}" "${native_list}" "${token}"; then
     changed=1
-    warn "updated ${PACMAN_FILE_NAME}"
+    warn "updated ${pacman_file}"
   fi
 
-  if update_gist_if_changed "${AUR_GIST_ID}" "${AUR_FILE_NAME}" "${aur_list}" "${token}"; then
+  if update_gist_if_changed "${AUR_GIST_ID}" "${aur_file}" "${aur_list}" "${token}"; then
     changed=1
-    warn "updated ${AUR_FILE_NAME}"
+    warn "updated ${aur_file}"
   fi
 
   if [[ "${changed}" -eq 0 ]] && ! ${quiet}; then
@@ -597,7 +616,7 @@ cmd_sync() {
 }
 
 cmd_status() {
-  local token native_list aur_list pac_ok aur_ok pac_url aur_url
+  local token native_list aur_list pac_ok aur_ok pac_url aur_url pacman_file aur_file
   load_config
 
   if ! has_configured_ids; then
@@ -607,14 +626,16 @@ cmd_status() {
   token="$(get_token)"
   native_list="$(make_native_list)"
   aur_list="$(make_aur_list)"
+  pacman_file="$(pacman_file_name)"
+  aur_file="$(aur_file_name)"
 
   pac_ok="out-of-sync"
   aur_ok="out-of-sync"
 
-  if is_gist_current "${PACMAN_GIST_ID}" "${PACMAN_FILE_NAME}" "${native_list}" "${token}"; then
+  if is_gist_current "${PACMAN_GIST_ID}" "${pacman_file}" "${native_list}" "${token}"; then
     pac_ok="up-to-date"
   fi
-  if is_gist_current "${AUR_GIST_ID}" "${AUR_FILE_NAME}" "${aur_list}" "${token}"; then
+  if is_gist_current "${AUR_GIST_ID}" "${aur_file}" "${aur_list}" "${token}"; then
     aur_ok="up-to-date"
   fi
 

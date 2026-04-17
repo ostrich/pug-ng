@@ -144,13 +144,32 @@ enforce_token_file_permissions() {
 
 ensure_config_file_readable() {
   local file="$1"
+  local error=""
+
+  if error="$(config_file_readability_error "${file}")"; then
+    die "${error}"
+  fi
+}
+
+config_file_readability_error() {
+  local file="$1"
   local mode
 
   [[ -e "${file}" ]] || return 0
-  [[ -r "${file}" ]] && return 0
+  [[ -r "${file}" ]] && return 1
 
   mode="$(file_mode "${file}")" || die "failed to read mode for config file: ${file}"
-  die "config file is not readable (${mode}); run: sudo chmod 644 ${file}"
+  printf 'config file is not readable (%s); run: sudo chmod 644 %s' "${mode}" "${file}"
+  return 0
+}
+
+source_config_file() {
+  ensure_config_file_readable "${CONFIG_FILE}"
+  # shellcheck disable=SC1090
+  source "${CONFIG_FILE}"
+  PACMAN_GIST_ID="${PACMAN_GIST_ID:-}"
+  AUR_GIST_ID="${AUR_GIST_ID:-}"
+  TOKEN_FILE="${TOKEN_FILE:-${TOKEN_FILE_DEFAULT}}"
 }
 
 create_config_if_missing() {
@@ -172,12 +191,7 @@ EOF
 
 load_config() {
   create_config_if_missing
-  ensure_config_file_readable "${CONFIG_FILE}"
-  # shellcheck disable=SC1090
-  source "${CONFIG_FILE}"
-  PACMAN_GIST_ID="${PACMAN_GIST_ID:-}"
-  AUR_GIST_ID="${AUR_GIST_ID:-}"
-  TOKEN_FILE="${TOKEN_FILE:-${TOKEN_FILE_DEFAULT}}"
+  source_config_file
 }
 
 save_config() {
@@ -611,18 +625,22 @@ EOF
 cmd_doctor() {
   local issues=0
   local validation_error=""
+  local config_error=""
   local token=""
   local mode=""
 
   echo "pug-ng doctor"
 
   if [[ -f "${CONFIG_FILE}" ]]; then
-    # shellcheck disable=SC1090
-    source "${CONFIG_FILE}"
-    PACMAN_GIST_ID="${PACMAN_GIST_ID:-}"
-    AUR_GIST_ID="${AUR_GIST_ID:-}"
-    TOKEN_FILE="${TOKEN_FILE:-${TOKEN_FILE_DEFAULT}}"
-    echo "config: ok (${CONFIG_FILE})"
+    if config_error="$(config_file_readability_error "${CONFIG_FILE}")"; then
+      TOKEN_FILE="${TOKEN_FILE_DEFAULT}"
+      echo "config: unreadable (${CONFIG_FILE})"
+      echo "config detail: ${config_error}"
+      issues=1
+    else
+      source_config_file
+      echo "config: ok (${CONFIG_FILE})"
+    fi
   else
     TOKEN_FILE="${TOKEN_FILE_DEFAULT}"
     echo "config: missing (${CONFIG_FILE})"

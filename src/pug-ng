@@ -416,6 +416,11 @@ create_gist() {
   jq -r '.id' <<<"${response}"
 }
 
+gist_url() {
+  local gist_id="$1"
+  printf 'https://gist.github.com/%s' "${gist_id}"
+}
+
 do_import_legacy() {
   local force_token="$1"
   local legacy_file="/etc/pug"
@@ -561,7 +566,7 @@ cmd_sync() {
 }
 
 cmd_status() {
-  local token native_list aur_list pac_ok aur_ok
+  local token native_list aur_list pac_ok aur_ok pac_url aur_url
   load_config
 
   if ! has_configured_ids; then
@@ -582,9 +587,14 @@ cmd_status() {
     aur_ok="up-to-date"
   fi
 
+  pac_url="$(gist_url "${PACMAN_GIST_ID}")"
+  aur_url="$(gist_url "${AUR_GIST_ID}")"
+
   cat <<EOF
 Pacman gist (${PACMAN_GIST_ID}): ${pac_ok}
+  ${pac_url}
 AUR gist (${AUR_GIST_ID}): ${aur_ok}
+  ${aur_url}
 EOF
 }
 

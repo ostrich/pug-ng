@@ -21,9 +21,8 @@ The original `pug` implementation dates back to 2017 and has a few operational p
 - Explicit one-time setup: `pug-ng init`
 - Uses GitHub REST API via `curl` + `jq` (no Ruby `gist` gem)
 - Config file in `/etc/pug-ng/config`
-- Token from file (`/etc/pug-ng/token` by default)
+- Token from file (`/etc/pug-ng/token` by default, permission restricted)
 - Legacy import from `/etc/pug`
-- Non-secret config is kept readable; only the token file is permission-restricted
 - Reuses existing hostname-specific gists during `init` when matching filenames already exist
 
 ## Commands

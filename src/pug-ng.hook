@@ -1,0 +1,14 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+Description = Sync package lists to GitHub Gists (pug-ng)
+Depends = coreutils
+Depends = curl
+Depends = jq
+When = PostTransaction
+Exec = /usr/bin/pug-ng sync --hook --quiet

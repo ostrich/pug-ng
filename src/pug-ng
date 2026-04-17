@@ -1,0 +1,746 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly APP_NAME="pug-ng"
+readonly CONFIG_FILE="${PUG_NG_CONFIG_FILE:-/etc/pug-ng/config}"
+readonly TOKEN_FILE_DEFAULT="/etc/pug-ng/token"
+readonly PACMAN_FILE_NAME="pacman-list.pkg"
+readonly AUR_FILE_NAME="aur-list.pkg"
+readonly GITHUB_API_BASE="https://api.github.com"
+
+quiet=false
+hook_mode=false
+
+die() {
+  echo "${APP_NAME}: $*" >&2
+  exit 1
+}
+
+warn() {
+  if ! ${quiet}; then
+    echo "${APP_NAME}: $*" >&2
+  fi
+}
+
+require_cmd() {
+  local name
+  for name in "$@"; do
+    command -v "${name}" >/dev/null 2>&1 || die "missing required command: ${name}"
+  done
+}
+
+ensure_root() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    die "this command must run as root"
+  fi
+}
+
+legacy_pug_present() {
+  [[ -f /etc/pug || -f /usr/share/libalpm/hooks/pug.hook || -f /opt/pug/pug.sh ]] && return 0
+  pacman -Q pug >/dev/null 2>&1 && return 0
+  return 1
+}
+
+prompt_yes_no_default_yes() {
+  local prompt="$1"
+  local answer
+  printf '%s [Y/n] ' "${prompt}" >&2
+  IFS= read -r answer || true
+  case "${answer}" in
+    ""|y|Y|yes|YES)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+prompt_for_token_interactive() {
+  local token=""
+  warn "GitHub token required. Create one at: https://github.com/settings/tokens (classic token with 'gist' scope)"
+  printf 'Enter GitHub token: ' >&2
+  IFS= read -r token || true
+  [[ -n "${token}" ]] || die "no token provided"
+  printf '%s' "${token}"
+}
+
+warn_uninstall_legacy_pug() {
+  warn "legacy pug appears to be installed; uninstall it to avoid duplicate/competing hooks"
+  warn "suggested command: sudo pacman -Rns pug"
+}
+
+read_legacy_gist_token() {
+  local file="$1"
+  local line=""
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line="${line%$'\r'}"
+    [[ -n "${line//[[:space:]]/}" ]] || continue
+    printf '%s' "${line}"
+    return 0
+  done <"${file}"
+  return 1
+}
+
+strip_wrapping_quotes() {
+  local value="$1"
+  if [[ "${value}" == \"*\" && "${value}" == *\" ]]; then
+    printf '%s' "${value:1:${#value}-2}"
+    return 0
+  fi
+  if [[ "${value}" == \'*\' && "${value}" == *\' ]]; then
+    printf '%s' "${value:1:${#value}-2}"
+    return 0
+  fi
+  printf '%s' "${value}"
+}
+
+parse_legacy_gist_ids() {
+  local file="$1"
+  local line="" nat="" aur="" value=""
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line="${line%$'\r'}"
+    case "${line}" in
+      GIST_NAT=*)
+        value="${line#GIST_NAT=}"
+        nat="$(strip_wrapping_quotes "${value}")"
+        ;;
+      GIST_AUR=*)
+        value="${line#GIST_AUR=}"
+        aur="$(strip_wrapping_quotes "${value}")"
+        ;;
+    esac
+  done <"${file}"
+
+  [[ -n "${nat}" && -n "${aur}" ]] || return 1
+  printf '%s\n%s\n' "${nat}" "${aur}"
+}
+
+token_file_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null || return 1
+}
+
+enforce_token_file_permissions() {
+  local file="$1"
+  local mode
+
+  [[ -e "${file}" ]] || return 0
+  mode="$(token_file_mode "${file}")" || die "failed to read mode for token file: ${file}"
+  case "${mode}" in
+    600|400)
+      return 0
+      ;;
+  esac
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    chmod 600 "${file}" || die "failed to set mode 600 on token file: ${file}"
+    warn "fixed token file permissions to 600: ${file}"
+  else
+    die "token file permissions are too open (${mode}); run: sudo chmod 600 ${file}"
+  fi
+}
+
+create_config_if_missing() {
+  if [[ ! -f "${CONFIG_FILE}" ]]; then
+    mkdir -p "$(dirname "${CONFIG_FILE}")"
+    umask 077
+    cat >"${CONFIG_FILE}" <<EOF
+PACMAN_GIST_ID=""
+AUR_GIST_ID=""
+TOKEN_FILE="${TOKEN_FILE_DEFAULT}"
+EOF
+    warn "created ${CONFIG_FILE}"
+  fi
+}
+
+load_config() {
+  create_config_if_missing
+  # shellcheck disable=SC1090
+  source "${CONFIG_FILE}"
+  PACMAN_GIST_ID="${PACMAN_GIST_ID:-}"
+  AUR_GIST_ID="${AUR_GIST_ID:-}"
+  TOKEN_FILE="${TOKEN_FILE:-${TOKEN_FILE_DEFAULT}}"
+}
+
+save_config() {
+  ensure_root
+  mkdir -p "$(dirname "${CONFIG_FILE}")"
+  umask 077
+  cat >"${CONFIG_FILE}" <<EOF
+PACMAN_GIST_ID="${PACMAN_GIST_ID}"
+AUR_GIST_ID="${AUR_GIST_ID}"
+TOKEN_FILE="${TOKEN_FILE}"
+EOF
+}
+
+get_token() {
+  local token=""
+
+  if [[ -r "${TOKEN_FILE}" ]]; then
+    enforce_token_file_permissions "${TOKEN_FILE}"
+    token="$(<"${TOKEN_FILE}")"
+  fi
+
+  [[ -n "${token}" ]] || die "missing GitHub token in TOKEN_FILE (${TOKEN_FILE})"
+  printf '%s' "${token}"
+}
+
+store_token_file() {
+  local token="$1"
+  mkdir -p "$(dirname "${TOKEN_FILE}")"
+  umask 077
+  printf '%s\n' "${token}" >"${TOKEN_FILE}"
+  chmod 600 "${TOKEN_FILE}" || die "failed to set mode 600 on token file: ${TOKEN_FILE}"
+  warn "stored token in ${TOKEN_FILE}"
+}
+
+github_status_request() {
+  local endpoint="$1"
+  local token="$2"
+  local status=""
+  if ! status="$(curl -sS -o /dev/null -w '%{http_code}' \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer ${token}" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "${GITHUB_API_BASE}${endpoint}")"; then
+    printf '000'
+    return 0
+  fi
+  printf '%s' "${status}"
+}
+
+validate_token_with_reason() {
+  local token="$1"
+  local status
+
+  status="$(github_status_request "/user" "${token}")"
+  case "${status}" in
+    200)
+      ;;
+    401|403)
+      echo "authentication failed"
+      return 1
+      ;;
+    000)
+      echo "could not reach GitHub API"
+      return 1
+      ;;
+    *)
+      echo "GitHub /user returned HTTP ${status}"
+      return 1
+      ;;
+  esac
+
+  status="$(github_status_request "/gists?per_page=1" "${token}")"
+  case "${status}" in
+    200)
+      return 0
+      ;;
+    403)
+      echo "token is valid but missing gist permission"
+      return 1
+      ;;
+    401)
+      echo "authentication failed"
+      return 1
+      ;;
+    000)
+      echo "could not reach GitHub API"
+      return 1
+      ;;
+    *)
+      echo "GitHub /gists returned HTTP ${status}"
+      return 1
+      ;;
+  esac
+}
+
+github_json_request() {
+  local method="$1"
+  local endpoint="$2"
+  local token="$3"
+  local payload="${4-}"
+  local response
+
+  if [[ -n "${payload}" ]]; then
+    response="$(curl -fsS -X "${method}" \
+      -H "Accept: application/vnd.github+json" \
+      -H "Authorization: Bearer ${token}" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      -H "Content-Type: application/json" \
+      --data "${payload}" \
+      "${GITHUB_API_BASE}${endpoint}")" || die "GitHub API request failed (${method} ${endpoint})"
+  else
+    response="$(curl -fsS -X "${method}" \
+      -H "Accept: application/vnd.github+json" \
+      -H "Authorization: Bearer ${token}" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "${GITHUB_API_BASE}${endpoint}")" || die "GitHub API request failed (${method} ${endpoint})"
+  fi
+
+  printf '%s' "${response}"
+}
+
+has_configured_ids() {
+  [[ -n "${PACMAN_GIST_ID}" && -n "${AUR_GIST_ID}" ]]
+}
+
+resolve_token_for_init() {
+  local token_arg="$1"
+  local token=""
+  local validation_error=""
+
+  if [[ -n "${token_arg}" ]]; then
+    if ! validation_error="$(validate_token_with_reason "${token_arg}")"; then
+      die "invalid GitHub token provided via --token: ${validation_error}"
+    fi
+    store_token_file "${token_arg}"
+    printf '%s' "${token_arg}"
+    return 0
+  fi
+
+  if [[ ! -s "${TOKEN_FILE}" ]]; then
+    if [[ -t 0 ]]; then
+      token="$(prompt_for_token_interactive)"
+      if ! validation_error="$(validate_token_with_reason "${token}")"; then
+        die "invalid GitHub token entered interactively: ${validation_error}"
+      fi
+      store_token_file "${token}"
+      printf '%s' "${token}"
+      return 0
+    fi
+    die "missing GitHub token in TOKEN_FILE (${TOKEN_FILE}); pass --token or create the token file"
+  fi
+
+  token="$(get_token)"
+  if ! validation_error="$(validate_token_with_reason "${token}")"; then
+    warn "token in ${TOKEN_FILE} is invalid: ${validation_error}"
+    die "cannot continue with invalid token"
+  fi
+  printf '%s' "${token}"
+}
+
+make_native_list() {
+  pacman -Qqen | LC_ALL=C sort
+}
+
+make_aur_list() {
+  pacman -Qqem | LC_ALL=C sort
+}
+
+update_gist_if_changed() {
+  local gist_id="$1"
+  local file_name="$2"
+  local desired_content="$3"
+  local token="$4"
+  local gist_json current_content payload
+
+  gist_json="$(github_json_request GET "/gists/${gist_id}" "${token}")"
+  current_content="$(jq -r --arg f "${file_name}" '.files[$f].content // empty' <<<"${gist_json}")"
+
+  if [[ "${desired_content}" == "${current_content}" ]]; then
+    return 1
+  fi
+
+  payload="$(jq -n --arg f "${file_name}" --arg c "${desired_content}" '{files: {($f): {content: $c}}}')"
+  github_json_request PATCH "/gists/${gist_id}" "${token}" "${payload}" >/dev/null
+  return 0
+}
+
+gist_file_content() {
+  local gist_id="$1"
+  local file_name="$2"
+  local token="$3"
+  local gist_json truncated raw_url content
+
+  gist_json="$(github_json_request GET "/gists/${gist_id}" "${token}")"
+  truncated="$(jq -r --arg f "${file_name}" '.files[$f].truncated // false' <<<"${gist_json}")"
+
+  if [[ "${truncated}" == "true" ]]; then
+    raw_url="$(jq -r --arg f "${file_name}" '.files[$f].raw_url // empty' <<<"${gist_json}")"
+    [[ -n "${raw_url}" ]] || die "failed to resolve raw URL for ${file_name} in gist ${gist_id}"
+    curl -fsS "${raw_url}" || die "failed to read raw gist content for ${file_name}"
+    return 0
+  fi
+
+  content="$(jq -r --arg f "${file_name}" '.files[$f].content // empty' <<<"${gist_json}")"
+  printf '%s' "${content}"
+}
+
+is_gist_current() {
+  local gist_id="$1"
+  local file_name="$2"
+  local desired_content="$3"
+  local token="$4"
+  local remote_content
+
+  remote_content="$(gist_file_content "${gist_id}" "${file_name}" "${token}")"
+  [[ "${desired_content}" == "${remote_content}" ]]
+}
+
+create_gist() {
+  local file_name="$1"
+  local description="$2"
+  local public_flag="$3"
+  local content="$4"
+  local token="$5"
+  local payload response
+
+  payload="$(jq -n \
+    --arg desc "${description}" \
+    --arg f "${file_name}" \
+    --arg c "${content}" \
+    --argjson pub "${public_flag}" \
+    '{description: $desc, public: $pub, files: {($f): {content: $c}}}')"
+
+  response="$(github_json_request POST "/gists" "${token}" "${payload}")"
+  jq -r '.id' <<<"${response}"
+}
+
+do_import_legacy() {
+  local force_token="$1"
+  local legacy_file="/etc/pug"
+  local legacy_token_file="/root/.gist"
+  local imported_token=false
+  local legacy_token=""
+  local ids=()
+  local validation_error=""
+
+  [[ -f "${legacy_file}" ]] || die "legacy file not found: ${legacy_file}"
+  if ! mapfile -t ids < <(parse_legacy_gist_ids "${legacy_file}"); then
+    die "legacy file is missing valid GIST_NAT/GIST_AUR values"
+  fi
+  PACMAN_GIST_ID="${ids[0]}"
+  AUR_GIST_ID="${ids[1]}"
+  save_config
+  warn "imported legacy IDs from ${legacy_file}"
+
+  if [[ -r "${legacy_token_file}" ]]; then
+    if ! legacy_token="$(read_legacy_gist_token "${legacy_token_file}")"; then
+      warn "could not parse a token from ${legacy_token_file}; provide token manually with 'pug-ng init --token <token>'"
+    elif ! validation_error="$(validate_token_with_reason "${legacy_token}")"; then
+      warn "legacy token from ${legacy_token_file} is invalid: ${validation_error}"
+    elif [[ ! -e "${TOKEN_FILE}" || "${force_token}" == "true" ]]; then
+      store_token_file "${legacy_token}"
+      imported_token=true
+    fi
+  fi
+
+  if [[ "${imported_token}" == "true" ]]; then
+    warn "imported legacy token from ${legacy_token_file} to ${TOKEN_FILE}"
+  elif [[ -r "${legacy_token_file}" ]]; then
+    warn "kept existing token file (${TOKEN_FILE}); use --force-token to overwrite from ${legacy_token_file}"
+  else
+    warn "legacy token file not found: ${legacy_token_file}"
+  fi
+}
+
+cmd_init() {
+  local visibility="false"
+  local token_arg=""
+  local token_file_arg=""
+  local force=false
+  local token=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --public)
+        visibility="true"
+        ;;
+      --private)
+        visibility="false"
+        ;;
+      --token)
+        shift
+        [[ $# -gt 0 ]] || die "--token requires a value"
+        token_arg="$1"
+        ;;
+      --token-file)
+        shift
+        [[ $# -gt 0 ]] || die "--token-file requires a value"
+        token_file_arg="$1"
+        ;;
+      --force)
+        force=true
+        ;;
+      *)
+        die "unknown init option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  ensure_root
+  load_config
+
+  if [[ -n "${token_file_arg}" ]]; then
+    TOKEN_FILE="${token_file_arg}"
+  fi
+
+  if legacy_pug_present && ! has_configured_ids && [[ -t 0 ]] && [[ -f /etc/pug ]]; then
+    if prompt_yes_no_default_yes "legacy pug installation detected. Migrate existing /etc/pug and /root/.gist now?"; then
+      do_import_legacy false
+      token="$(resolve_token_for_init "")"
+      warn_uninstall_legacy_pug
+      return 0
+    fi
+  fi
+
+  local native_list aur_list
+  token="$(resolve_token_for_init "${token_arg}")"
+  native_list="$(make_native_list)"
+  aur_list="$(make_aur_list)"
+
+  if has_configured_ids && ! ${force}; then
+    die "gists already configured; use --force to recreate them"
+  fi
+
+  PACMAN_GIST_ID="$(create_gist "${PACMAN_FILE_NAME}" "Pacman package list from ${APP_NAME}" "${visibility}" "${native_list}" "${token}")"
+  AUR_GIST_ID="$(create_gist "${AUR_FILE_NAME}" "AUR package list from ${APP_NAME}" "${visibility}" "${aur_list}" "${token}")"
+  save_config
+
+  cat <<EOF
+PACMAN_GIST_ID=${PACMAN_GIST_ID}
+AUR_GIST_ID=${AUR_GIST_ID}
+CONFIG_FILE=${CONFIG_FILE}
+EOF
+
+  if legacy_pug_present; then
+    warn_uninstall_legacy_pug
+  fi
+}
+
+cmd_sync() {
+  local token native_list aur_list changed=0
+  load_config
+
+  if ! has_configured_ids; then
+    if ${hook_mode}; then
+      warn "configuration incomplete; run '${APP_NAME} init' once"
+      return 0
+    fi
+    die "configuration incomplete; run '${APP_NAME} init' once"
+  fi
+
+  token="$(get_token)"
+  native_list="$(make_native_list)"
+  aur_list="$(make_aur_list)"
+
+  if update_gist_if_changed "${PACMAN_GIST_ID}" "${PACMAN_FILE_NAME}" "${native_list}" "${token}"; then
+    changed=1
+    warn "updated ${PACMAN_FILE_NAME}"
+  fi
+
+  if update_gist_if_changed "${AUR_GIST_ID}" "${AUR_FILE_NAME}" "${aur_list}" "${token}"; then
+    changed=1
+    warn "updated ${AUR_FILE_NAME}"
+  fi
+
+  if [[ "${changed}" -eq 0 ]] && ! ${quiet}; then
+    echo "No changes."
+  fi
+}
+
+cmd_status() {
+  local token native_list aur_list pac_ok aur_ok
+  load_config
+
+  if ! has_configured_ids; then
+    die "configuration incomplete; run '${APP_NAME} init' once"
+  fi
+
+  token="$(get_token)"
+  native_list="$(make_native_list)"
+  aur_list="$(make_aur_list)"
+
+  pac_ok="out-of-sync"
+  aur_ok="out-of-sync"
+
+  if is_gist_current "${PACMAN_GIST_ID}" "${PACMAN_FILE_NAME}" "${native_list}" "${token}"; then
+    pac_ok="up-to-date"
+  fi
+  if is_gist_current "${AUR_GIST_ID}" "${AUR_FILE_NAME}" "${aur_list}" "${token}"; then
+    aur_ok="up-to-date"
+  fi
+
+  cat <<EOF
+Pacman gist (${PACMAN_GIST_ID}): ${pac_ok}
+AUR gist (${AUR_GIST_ID}): ${aur_ok}
+EOF
+}
+
+cmd_show_config() {
+  load_config
+  cat <<EOF
+CONFIG_FILE=${CONFIG_FILE}
+TOKEN_FILE=${TOKEN_FILE}
+PACMAN_GIST_ID=${PACMAN_GIST_ID}
+AUR_GIST_ID=${AUR_GIST_ID}
+EOF
+}
+
+cmd_doctor() {
+  local issues=0
+  local validation_error=""
+  local token=""
+  local mode=""
+
+  echo "pug-ng doctor"
+
+  if [[ -f "${CONFIG_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${CONFIG_FILE}"
+    PACMAN_GIST_ID="${PACMAN_GIST_ID:-}"
+    AUR_GIST_ID="${AUR_GIST_ID:-}"
+    TOKEN_FILE="${TOKEN_FILE:-${TOKEN_FILE_DEFAULT}}"
+    echo "config: ok (${CONFIG_FILE})"
+  else
+    TOKEN_FILE="${TOKEN_FILE_DEFAULT}"
+    echo "config: missing (${CONFIG_FILE})"
+    issues=1
+  fi
+
+  if [[ -e "${TOKEN_FILE}" ]]; then
+    mode="$(token_file_mode "${TOKEN_FILE}" 2>/dev/null || true)"
+    if [[ "${mode}" == "600" || "${mode}" == "400" ]]; then
+      echo "token file: ok (${TOKEN_FILE}, mode ${mode})"
+    else
+      echo "token file: bad mode (${TOKEN_FILE}, mode ${mode:-unknown})"
+      issues=1
+    fi
+  else
+    echo "token file: missing (${TOKEN_FILE})"
+    issues=1
+  fi
+
+  if [[ -r "${TOKEN_FILE}" && -s "${TOKEN_FILE}" ]]; then
+    token="$(<"${TOKEN_FILE}")"
+    if validation_error="$(validate_token_with_reason "${token}")"; then
+      echo "token validation: ok (auth + gist permission)"
+    else
+      echo "token validation: failed (${validation_error})"
+      issues=1
+    fi
+  else
+    echo "token validation: skipped (no readable token)"
+    issues=1
+  fi
+
+  if [[ -n "${PACMAN_GIST_ID:-}" && -n "${AUR_GIST_ID:-}" ]]; then
+    echo "gist IDs: configured"
+  else
+    echo "gist IDs: missing (run 'pug-ng init' or 'pug-ng import-legacy')"
+    issues=1
+  fi
+
+  if [[ -f /usr/share/libalpm/hooks/pug-ng.hook ]]; then
+    echo "hook: ok (/usr/share/libalpm/hooks/pug-ng.hook)"
+  else
+    echo "hook: missing (/usr/share/libalpm/hooks/pug-ng.hook)"
+    issues=1
+  fi
+
+  if legacy_pug_present; then
+    echo "legacy pug: detected (recommended: sudo pacman -Rns pug)"
+  else
+    echo "legacy pug: not detected"
+  fi
+
+  [[ "${issues}" -eq 0 ]]
+}
+
+cmd_import_legacy() {
+  ensure_root
+  load_config
+  local force_token=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force-token)
+        force_token=true
+        ;;
+      *)
+        die "unknown import-legacy option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  do_import_legacy "${force_token}"
+  warn_uninstall_legacy_pug
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  pug-ng init [--public|--private] [--token TOKEN] [--token-file PATH] [--force]
+  pug-ng sync [--quiet] [--hook]
+  pug-ng status
+  pug-ng show-config
+  pug-ng doctor
+  pug-ng import-legacy [--force-token]
+
+Notes:
+  - Default config file: /etc/pug-ng/config
+  - Token source: TOKEN_FILE (default /etc/pug-ng/token)
+  - The ALPM hook should call: pug-ng sync --hook --quiet
+EOF
+}
+
+main() {
+  require_cmd pacman curl jq
+
+  local command="${1:-}"
+  [[ -n "${command}" ]] || {
+    usage
+    exit 1
+  }
+  shift || true
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --quiet)
+        quiet=true
+        shift
+        ;;
+      --hook)
+        hook_mode=true
+        shift
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  case "${command}" in
+    init)
+      cmd_init "$@"
+      ;;
+    sync)
+      cmd_sync "$@"
+      ;;
+    status)
+      cmd_status
+      ;;
+    show-config)
+      cmd_show_config
+      ;;
+    doctor)
+      cmd_doctor
+      ;;
+    import-legacy)
+      cmd_import_legacy "$@"
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      die "unknown command: ${command}"
+      ;;
+  esac
+}
+
+main "$@"

@@ -13,7 +13,7 @@ The original `pug` implementation dates back to 2017 and has a few operational p
 - temporary file handling in fixed `/tmp/*` paths
 - no explicit command UX for setup, status, or migration
 
-`pug-ng` keeps the same outcome (sync native + AUR package lists to two gists) but with explicit commands and safer defaults.
+`pug-ng` keeps the same outcome (sync repo + AUR package lists to two gists) but with explicit commands and safer defaults.
 
 ## Features
 

@@ -1,5 +1,7 @@
 # pug-ng
 
+Sync Arch Linux official repository and AUR package lists to GitHub Gists via an ALPM hook.
+
 `pug-ng` is a replacement for the legacy `pug` hook script.
 
 ## Why this exists

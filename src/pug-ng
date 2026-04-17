@@ -163,6 +163,21 @@ config_file_readability_error() {
   return 0
 }
 
+token_file_readability_error() {
+  local file="$1"
+  local mode
+
+  [[ -e "${file}" ]] || {
+    printf 'missing GitHub token in TOKEN_FILE (%s)' "${file}"
+    return 0
+  }
+  [[ -r "${file}" ]] && return 1
+
+  mode="$(file_mode "${file}")" || die "failed to read mode for token file: ${file}"
+  printf 'GitHub token file is not readable (%s); run as root' "${mode}"
+  return 0
+}
+
 source_config_file() {
   ensure_config_file_readable "${CONFIG_FILE}"
   # shellcheck disable=SC1090
@@ -208,11 +223,13 @@ EOF
 
 get_token() {
   local token=""
+  local error=""
 
-  if [[ -r "${TOKEN_FILE}" ]]; then
-    enforce_token_file_permissions "${TOKEN_FILE}"
-    token="$(<"${TOKEN_FILE}")"
+  if error="$(token_file_readability_error "${TOKEN_FILE}")"; then
+    die "${error}"
   fi
+  enforce_token_file_permissions "${TOKEN_FILE}"
+  token="$(<"${TOKEN_FILE}")"
 
   [[ -n "${token}" ]] || die "missing GitHub token in TOKEN_FILE (${TOKEN_FILE})"
   printf '%s' "${token}"
@@ -626,6 +643,7 @@ cmd_doctor() {
   local issues=0
   local validation_error=""
   local config_error=""
+  local token_error=""
   local token=""
   local mode=""
 
@@ -634,8 +652,7 @@ cmd_doctor() {
   if [[ -f "${CONFIG_FILE}" ]]; then
     if config_error="$(config_file_readability_error "${CONFIG_FILE}")"; then
       TOKEN_FILE="${TOKEN_FILE_DEFAULT}"
-      echo "config: unreadable (${CONFIG_FILE})"
-      echo "config detail: ${config_error}"
+      echo "config: ${config_error}"
       issues=1
     else
       source_config_file
@@ -660,7 +677,13 @@ cmd_doctor() {
     issues=1
   fi
 
-  if [[ -r "${TOKEN_FILE}" && -s "${TOKEN_FILE}" ]]; then
+  if token_error="$(token_file_readability_error "${TOKEN_FILE}")"; then
+    echo "token validation: skipped (${token_error})"
+    issues=1
+  elif [[ ! -s "${TOKEN_FILE}" ]]; then
+    echo "token validation: skipped (token file is empty)"
+    issues=1
+  else
     token="$(<"${TOKEN_FILE}")"
     if validation_error="$(validate_token_with_reason "${token}")"; then
       echo "token validation: ok (auth + gist permission)"
@@ -668,9 +691,6 @@ cmd_doctor() {
       echo "token validation: failed (${validation_error})"
       issues=1
     fi
-  else
-    echo "token validation: skipped (no readable token)"
-    issues=1
   fi
 
   if [[ -n "${PACMAN_GIST_ID:-}" && -n "${AUR_GIST_ID:-}" ]]; then

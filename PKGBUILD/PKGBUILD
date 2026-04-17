@@ -8,6 +8,7 @@ license=('custom')
 depends=('bash' 'curl' 'jq' 'pacman')
 makedepends=('git' 'make')
 backup=('etc/pug-ng/config')
+install='pug-ng.install'
 source=("${pkgname}::git+${url}.git#tag=v${pkgver}")
 sha256sums=('SKIP')
 

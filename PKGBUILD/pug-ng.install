@@ -1,0 +1,6 @@
+post_install() {
+  cat <<'EOF'
+Run the initial setup once as root:
+  sudo pug-ng init
+EOF
+}

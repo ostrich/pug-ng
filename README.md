@@ -2,94 +2,118 @@
 
 Sync Arch Linux repo and AUR package lists to GitHub Gists via an ALPM hook.
 
-`pug-ng` is a modern reimplementation of the `pug` hook script.
+`pug-ng` is a modern reimplementation of the `pug` hook script. It keeps the same basic outcome, but makes setup, diagnostics, and migration explicit instead of burying them inside packaging-time behavior.
 
-## Why this exists
+## Why Use It
 
-The original `pug` implementation dates back to 2017 and has a few operational problems:
+Compared to the original `pug`, `pug-ng` is easier to operate and recover:
 
-- install-time interaction (`gist --login`) mixed into packaging
-- token management tied to `/root/.gist` and Ruby `gist` tooling
-- temporary file handling in fixed `/tmp/*` paths
-- no explicit command UX for setup, status, or migration
+- setup is explicit: run `pug-ng init` once, then let the hook do the rest
+- sync is non-interactive, so pacman hooks do not depend on login prompts
+- GitHub access uses `curl` and `jq`, not the Ruby `gist` toolchain
+- token handling is separated from general config
+- `doctor`, `status`, and `show-config` make troubleshooting straightforward
+- legacy `pug` config and token data can be imported
+- hostname-specific gist filenames are reused automatically when matching gists already exist in the authenticated account
 
-`pug-ng` keeps the same outcome (sync repo + AUR package lists to two gists) but with explicit commands and safer defaults.
+## Quick Start
 
-## Features
-
-- Non-interactive ALPM hook: `pug-ng sync --hook --quiet`
-- Explicit one-time setup: `pug-ng init`
-- Uses GitHub REST API via `curl` + `jq` (no Ruby `gist` gem)
-- Config file in `/etc/pug-ng/config`
-- Token from file (`/etc/pug-ng/token` by default, permission restricted)
-- Legacy import from `/etc/pug`
-- Reuses existing hostname-specific gists during `init` when matching filenames already exist
-
-## Commands
+Install the package, then initialize it once as root:
 
 ```bash
-# one-time setup (as root), creating two private gists
 sudo pug-ng init
+```
 
-# optional: create public gists
-sudo pug-ng init --public --force
+That will:
 
-# optional: pass token directly and store it in TOKEN_FILE
+- validate the GitHub token
+- create or reuse one gist for the official repository package list
+- create or reuse one gist for the AUR package list
+- write `/etc/pug-ng/config`
+
+By default, `init` prompts for a token if `/etc/pug-ng/token` does not exist. You can also provide one directly:
+
+```bash
 sudo pug-ng init --token "<github_token>"
+```
 
-# run sync manually
+To create public gists instead of private ones:
+
+```bash
+sudo pug-ng init --public --force
+```
+
+Minimum GitHub token permission: `gist`.
+
+## How It Works
+
+- the ALPM hook runs `pug-ng sync --hook --quiet` after package transactions
+- the official repository list and AUR list are uploaded to separate gists
+- gist filenames include the hostname:
+  - `<hostname>.pacman-list.pkg`
+  - `<hostname>.aur-list.pkg`
+- if `init` finds an existing gist with the expected hostname-specific filename, it reuses that gist instead of creating a new one
+
+## Common Commands
+
+```bash
+# run a sync manually
 sudo pug-ng sync
 
-# check IDs and paths
+# check whether both gists match local package state
+sudo pug-ng status
+
+# print config paths and configured gist IDs
 sudo pug-ng show-config
 
-# check full setup health (config/token/gist access/hook)
+# check config readability, token state, gist access, and hook installation
 sudo pug-ng doctor
+```
 
-# import GIST_NAT/GIST_AUR from old /etc/pug
+`pug-ng status` also prints the gist URLs so you can inspect them directly.
+
+## Migration From Legacy `pug`
+
+If `/etc/pug` and the old token file are present, `pug-ng init` can offer to migrate them interactively.
+
+You can also import the legacy settings directly:
+
+```bash
 sudo pug-ng import-legacy
+```
 
-# overwrite existing /etc/pug-ng/token from /root/.gist during migration
+To overwrite the current token from the legacy token file during migration:
+
+```bash
 sudo pug-ng import-legacy --force-token
 ```
 
-`pug-ng init` detects an existing legacy `pug` installation and, when possible, prompts to migrate from `/etc/pug` and `/root/.gist`.
-After migration (or when legacy files are still present), it warns to uninstall old `pug` to avoid duplicate hooks.
-If no token exists and `--token` is not provided, `init` prompts for one interactively with a link to GitHub token settings.
-During legacy migration, `pug-ng` reads the first non-empty line from `/root/.gist` and stores it in `/etc/pug-ng/token`.
-`init` validates tokens against GitHub before creating gists:
-- tokens entered via `--token` or interactive prompt are rejected if invalid
-- if an existing token file is invalid, `init` warns with the filename and exits
-- validation includes both authentication and gist-access permission
-- for hostname-specific filenames like `<hostname>.pacman-list.pkg`, `init` reuses an existing gist when exactly one match is found in the authenticated account
+After migration, uninstall the old `pug` package or hook so both tools do not try to sync at the same time.
 
-## Token handling
+## Configuration Notes
 
-Token source:
+- runtime config path: `/etc/pug-ng/config`
+- default token path: `/etc/pug-ng/token`
+- the config file is non-secret and should be readable
+- the token file is secret and should be `0600` or `0400`
+- if the token file is unreadable to an unprivileged user, status and doctor will tell you to run the command as root
 
-1. `TOKEN_FILE` from config (`/etc/pug-ng/token` default)
-
-Minimum token permission: `gist`.
-
-`pug-ng` enforces token file permissions at runtime. Accepted modes are `0600` (preferred) or `0400`.
-If run as root and mode is too open, it is automatically corrected to `0600`.
-
-## Install
+## Install From Source
 
 ```bash
-sudo make -C pug-ng install
+sudo make install
 ```
 
 This installs:
 
-- binary: `/usr/bin/pug-ng`
-- hook: `/usr/share/libalpm/hooks/pug-ng.hook`
-- config template (if missing): `/etc/pug-ng/config`
+- `pug-ng` to `/usr/bin/pug-ng`
+- the ALPM hook to `/usr/share/libalpm/hooks/pug-ng.hook`
+- a config file template to `/etc/pug-ng/config` if that file does not already exist
 
 ## Uninstall
 
 ```bash
-sudo make -C pug-ng uninstall
+sudo make uninstall
 ```
 
-Config and token files are left in place intentionally.
+The uninstall target removes the binary and hook, but leaves config and token files in place.

@@ -1,0 +1,17 @@
+pkgname=pug-ng
+pkgver=0.1
+pkgrel=1
+pkgdesc='Sync official repository and AUR package lists to GitHub Gists via an ALPM hook'
+arch=('any')
+url='https://github.com/ostrich/pug-ng'
+license=('custom')
+depends=('bash' 'curl' 'jq' 'pacman')
+makedepends=('git' 'make')
+backup=('etc/pug-ng/config')
+source=("${pkgname}::git+${url}.git#tag=v${pkgver}")
+sha256sums=('47decaf2b88d6bd7aa825188422c07c3c662bd73f5cb412bb4dca31b0754eebb')
+
+package() {
+  cd "${srcdir}/${pkgname}"
+  make DESTDIR="${pkgdir}" install
+}

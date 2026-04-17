@@ -1,0 +1,5 @@
+PKGBUILD/pkg/
+PKGBUILD/src/
+PKGBUILD/pug-ng/
+PKGBUILD/*.pkg.tar.*
+PKGBUILD/*.src.tar.*

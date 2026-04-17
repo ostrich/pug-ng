@@ -9,7 +9,7 @@ depends=('bash' 'curl' 'jq' 'pacman')
 makedepends=('git' 'make')
 backup=('etc/pug-ng/config')
 source=("${pkgname}::git+${url}.git#tag=v${pkgver}")
-sha256sums=('47decaf2b88d6bd7aa825188422c07c3c662bd73f5cb412bb4dca31b0754eebb')
+sha256sums=('SKIP')
 
 package() {
   cd "${srcdir}/${pkgname}"

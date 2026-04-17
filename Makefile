@@ -9,7 +9,7 @@ install:
 	install -d "$(BINDIR)" "$(HOOKDIR)" "$(CONFIGDIR)"
 	install -m 755 src/pug-ng "$(BINDIR)/pug-ng"
 	install -m 644 src/pug-ng.hook "$(HOOKDIR)/pug-ng.hook"
-	if [ ! -e "$(CONFIGDIR)/config" ]; then install -m 644 src/pug-ng.conf "$(CONFIGDIR)/config"; fi
+	if [ ! -e "$(CONFIGDIR)/config" ]; then install -m 644 src/config "$(CONFIGDIR)/config"; fi
 
 uninstall:
 	rm -f "$(BINDIR)/pug-ng"

@@ -749,6 +749,7 @@ cmd_doctor() {
   local validation_error=""
   local config_error=""
   local token_error=""
+  local gist_skip_reason=""
   local gist_error=""
   local token=""
   local mode=""
@@ -785,9 +786,11 @@ cmd_doctor() {
 
   if token_error="$(token_file_readability_error "${TOKEN_FILE}")"; then
     echo "token validation: skipped (${token_error})"
+    gist_skip_reason="${token_error}"
     issues=1
   elif [[ ! -s "${TOKEN_FILE}" ]]; then
     echo "token validation: skipped (token file is empty)"
+    gist_skip_reason="token file is empty"
     issues=1
   else
     token="$(<"${TOKEN_FILE}")"
@@ -795,6 +798,8 @@ cmd_doctor() {
       echo "token validation: ok (auth + gist permission)"
     else
       echo "token validation: failed (${validation_error})"
+      gist_skip_reason="${validation_error}"
+      token=""
       issues=1
     fi
   fi
@@ -815,7 +820,7 @@ cmd_doctor() {
         issues=1
       fi
     else
-      echo "gist access: skipped (no validated token)"
+      echo "gist access: skipped (${gist_skip_reason:-token validation did not succeed})"
       issues=1
     fi
   else

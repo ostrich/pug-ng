@@ -24,6 +24,7 @@ The original `pug` implementation dates back to 2017 and has a few operational p
 - Token from file (`/etc/pug-ng/token` by default)
 - Legacy import from `/etc/pug`
 - Non-secret config is kept readable; only the token file is permission-restricted
+- Reuses existing hostname-specific gists during `init` when matching filenames already exist
 
 ## Commands
 
@@ -61,6 +62,7 @@ During legacy migration, `pug-ng` reads the first non-empty line from `/root/.gi
 - tokens entered via `--token` or interactive prompt are rejected if invalid
 - if an existing token file is invalid, `init` warns with the filename and exits
 - validation includes both authentication and gist-access permission
+- for hostname-specific filenames like `<hostname>.pacman-list.pkg`, `init` reuses an existing gist when exactly one match is found in the authenticated account
 
 ## Token handling
 

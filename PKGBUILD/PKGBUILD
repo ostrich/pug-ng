@@ -1,7 +1,7 @@
 pkgname=pug-ng
 pkgver=0.1
 pkgrel=1
-pkgdesc='Sync official repository and AUR package lists to GitHub Gists via an ALPM hook'
+pkgdesc='Sync repo and AUR package lists to GitHub Gists via an ALPM hook'
 arch=('any')
 url='https://github.com/ostrich/pug-ng'
 license=('custom')

@@ -118,7 +118,7 @@ parse_legacy_gist_ids() {
   printf '%s\n%s\n' "${nat}" "${aur}"
 }
 
-token_file_mode() {
+file_mode() {
   stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null || return 1
 }
 
@@ -127,7 +127,7 @@ enforce_token_file_permissions() {
   local mode
 
   [[ -e "${file}" ]] || return 0
-  mode="$(token_file_mode "${file}")" || die "failed to read mode for token file: ${file}"
+  mode="$(file_mode "${file}")" || die "failed to read mode for token file: ${file}"
   case "${mode}" in
     600|400)
       return 0
@@ -142,21 +142,37 @@ enforce_token_file_permissions() {
   fi
 }
 
+ensure_config_file_readable() {
+  local file="$1"
+  local mode
+
+  [[ -e "${file}" ]] || return 0
+  [[ -r "${file}" ]] && return 0
+
+  mode="$(file_mode "${file}")" || die "failed to read mode for config file: ${file}"
+  die "config file is not readable (${mode}); run: sudo chmod 644 ${file}"
+}
+
 create_config_if_missing() {
   if [[ ! -f "${CONFIG_FILE}" ]]; then
+    if [[ "$(id -u)" -ne 0 ]]; then
+      die "missing config file (${CONFIG_FILE}); run 'sudo ${APP_NAME} init' once"
+    fi
     mkdir -p "$(dirname "${CONFIG_FILE}")"
-    umask 077
+    umask 022
     cat >"${CONFIG_FILE}" <<EOF
 PACMAN_GIST_ID=""
 AUR_GIST_ID=""
 TOKEN_FILE="${TOKEN_FILE_DEFAULT}"
 EOF
+    chmod 644 "${CONFIG_FILE}" || die "failed to set mode 644 on config file: ${CONFIG_FILE}"
     warn "created ${CONFIG_FILE}"
   fi
 }
 
 load_config() {
   create_config_if_missing
+  ensure_config_file_readable "${CONFIG_FILE}"
   # shellcheck disable=SC1090
   source "${CONFIG_FILE}"
   PACMAN_GIST_ID="${PACMAN_GIST_ID:-}"
@@ -167,12 +183,13 @@ load_config() {
 save_config() {
   ensure_root
   mkdir -p "$(dirname "${CONFIG_FILE}")"
-  umask 077
+  umask 022
   cat >"${CONFIG_FILE}" <<EOF
 PACMAN_GIST_ID="${PACMAN_GIST_ID}"
 AUR_GIST_ID="${AUR_GIST_ID}"
 TOKEN_FILE="${TOKEN_FILE}"
 EOF
+  chmod 644 "${CONFIG_FILE}" || die "failed to set mode 644 on config file: ${CONFIG_FILE}"
 }
 
 get_token() {
@@ -603,7 +620,7 @@ cmd_doctor() {
   fi
 
   if [[ -e "${TOKEN_FILE}" ]]; then
-    mode="$(token_file_mode "${TOKEN_FILE}" 2>/dev/null || true)"
+    mode="$(file_mode "${TOKEN_FILE}" 2>/dev/null || true)"
     if [[ "${mode}" == "600" || "${mode}" == "400" ]]; then
       echo "token file: ok (${TOKEN_FILE}, mode ${mode})"
     else

@@ -23,6 +23,7 @@ The original `pug` implementation dates back to 2017 and has a few operational p
 - Config file in `/etc/pug-ng/config`
 - Token from file (`/etc/pug-ng/token` by default)
 - Legacy import from `/etc/pug`
+- Non-secret config is kept readable; only the token file is permission-restricted
 
 ## Commands
 

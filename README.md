@@ -4,7 +4,7 @@
 
 ## Why this exists
 
-The original implementation in this repository is from 2017 and has a few operational problems:
+The original `pug` implementation dates back to 2017 and has a few operational problems:
 
 - install-time interaction (`gist --login`) mixed into packaging
 - token management tied to `/root/.gist` and Ruby `gist` tooling

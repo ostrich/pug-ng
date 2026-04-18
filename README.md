@@ -96,7 +96,7 @@ After migration, uninstall the old `pug` package or hook so both tools do not tr
 - default token path: `/etc/pug-ng/token`
 - the config file is non-secret and should be readable
 - the token file is secret and should be `0600` or `0400`
-- if the token file is unreadable to an unprivileged user, status and doctor will tell you to run the command as root
+- the token file is unreadable to an unprivileged user, so status and doctor will tell you to run the command as root
 
 ## Install From Source
 

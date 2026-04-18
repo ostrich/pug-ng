@@ -9,7 +9,6 @@ Sync Arch Linux repo and AUR package lists to GitHub Gists via an ALPM hook.
 Compared to the original `pug`, `pug-ng` is easier to operate and recover:
 
 - setup is explicit: run `pug-ng init` once, then let the hook do the rest
-- sync is non-interactive, so pacman hooks do not depend on login prompts
 - GitHub access uses `curl` and `jq`, not the Ruby `gist` toolchain
 - token handling is separated from general config
 - `doctor`, `status`, and `show-config` make troubleshooting straightforward

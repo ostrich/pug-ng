@@ -55,6 +55,58 @@ legacy_pug_present() {
   return 1
 }
 
+append_unique() {
+  local value="$1"
+  shift
+  local existing
+
+  for existing in "$@"; do
+    [[ "${existing}" == "${value}" ]] && return 1
+  done
+  return 0
+}
+
+legacy_pug_packages() {
+  local path owner package
+  local -a packages=()
+  local -a paths=(
+    /usr/share/libalpm/hooks/pug.hook
+    /opt/pug/pug.sh
+    /etc/pug
+  )
+
+  for path in "${paths[@]}"; do
+    [[ -e "${path}" ]] || continue
+    while IFS= read -r owner; do
+      [[ -n "${owner}" ]] || continue
+      if append_unique "${owner}" "${packages[@]}"; then
+        packages+=("${owner}")
+      fi
+    done < <(pacman -Qoq "${path}" 2>/dev/null || true)
+  done
+
+  if pacman -Q pug >/dev/null 2>&1 && append_unique "pug" "${packages[@]}"; then
+    packages+=("pug")
+  fi
+
+  for package in "${packages[@]}"; do
+    printf '%s\n' "${package}"
+  done
+}
+
+legacy_pug_remove_command() {
+  local -a packages=()
+
+  mapfile -t packages < <(legacy_pug_packages)
+  if [[ "${#packages[@]}" -eq 0 ]]; then
+    return 1
+  fi
+
+  printf 'sudo pacman -Rns'
+  printf ' %s' "${packages[@]}"
+  printf '\n'
+}
+
 prompt_yes_no_default_yes() {
   local prompt="$1"
   local answer
@@ -80,8 +132,14 @@ prompt_for_token_interactive() {
 }
 
 warn_uninstall_legacy_pug() {
+  local remove_command=""
+
   warn "legacy pug appears to be installed; uninstall it to avoid duplicate/competing hooks"
-  warn "suggested command: sudo pacman -Rns pug"
+  if remove_command="$(legacy_pug_remove_command)"; then
+    warn "suggested command: ${remove_command}"
+  else
+    warn "remove the package that owns /usr/share/libalpm/hooks/pug.hook or /opt/pug/pug.sh"
+  fi
 }
 
 read_legacy_gist_token() {
@@ -751,6 +809,7 @@ cmd_doctor() {
   local token_error=""
   local gist_skip_reason=""
   local gist_error=""
+  local remove_command=""
   local token=""
   local mode=""
 
@@ -836,7 +895,11 @@ cmd_doctor() {
   fi
 
   if legacy_pug_present; then
-    echo "legacy pug: detected (recommended: sudo pacman -Rns pug)"
+    if remove_command="$(legacy_pug_remove_command)"; then
+      echo "legacy pug: detected (recommended: ${remove_command})"
+    else
+      echo "legacy pug: detected (remove the package that owns /usr/share/libalpm/hooks/pug.hook or /opt/pug/pug.sh)"
+    fi
   else
     echo "legacy pug: not detected"
   fi

@@ -6,7 +6,7 @@ Type = Package
 Target = *
 
 [Action]
-Description = Sync package lists to GitHub Gists (pug-ng)
+Description = Syncing package lists to GitHub Gists
 Depends = coreutils
 Depends = curl
 Depends = jq

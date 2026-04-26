@@ -134,7 +134,7 @@ prompt_for_token_interactive() {
 warn_uninstall_legacy_pug() {
   local remove_command=""
 
-  warn "legacy pug appears to be installed; uninstall it to avoid duplicate/competing hooks"
+  warn "legacy pug installation still detected; uninstall it to avoid competing hooks"
   if remove_command="$(legacy_pug_remove_command)"; then
     warn "suggested command: ${remove_command}"
   else
@@ -312,7 +312,6 @@ store_token_file() {
   umask 077
   printf '%s\n' "${token}" >"${TOKEN_FILE}"
   chmod 600 "${TOKEN_FILE}" || die "failed to set mode 600 on token file: ${TOKEN_FILE}"
-  warn "stored token in ${TOKEN_FILE}"
 }
 
 github_status_request() {
@@ -450,6 +449,7 @@ resolve_token_for_init() {
       die "invalid GitHub token provided via --token: ${validation_error}"
     fi
     store_token_file "${token_arg}"
+    warn "stored GitHub token in ${TOKEN_FILE}"
     printf '%s' "${token_arg}"
     return 0
   fi
@@ -461,6 +461,7 @@ resolve_token_for_init() {
         die "invalid GitHub token entered interactively: ${validation_error}"
       fi
       store_token_file "${token}"
+      warn "stored GitHub token in ${TOKEN_FILE}"
       printf '%s' "${token}"
       return 0
     fi
@@ -678,7 +679,7 @@ cmd_init() {
   fi
 
   if legacy_pug_present && ! has_configured_ids && [[ -t 0 ]] && [[ -f /etc/pug ]]; then
-    if prompt_yes_no_default_yes "legacy pug installation detected. Migrate existing /etc/pug and /root/.gist now?"; then
+    if prompt_yes_no_default_yes "legacy pug installation detected. Import /etc/pug IDs and /root/.gist token?"; then
       do_import_legacy false
       token="$(resolve_token_for_init "")"
       warn_uninstall_legacy_pug

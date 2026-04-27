@@ -134,7 +134,7 @@ prompt_for_token_interactive() {
 warn_uninstall_legacy_pug() {
   local remove_command=""
 
-  warn "legacy pug installation still detected; uninstall it to avoid competing hooks"
+  warn "uninstall legacy pug to avoid competing hooks"
   if remove_command="$(legacy_pug_remove_command)"; then
     warn "suggested command: ${remove_command}"
   else
@@ -611,7 +611,7 @@ do_import_legacy() {
   PACMAN_GIST_ID="${ids[0]}"
   AUR_GIST_ID="${ids[1]}"
   save_config
-  warn "imported legacy IDs from ${legacy_file}"
+  warn "imported legacy IDs from ${legacy_file} to ${CONFIG_FILE}"
 
   if [[ -r "${legacy_token_file}" ]]; then
     if ! legacy_token="$(read_legacy_gist_token "${legacy_token_file}")"; then
